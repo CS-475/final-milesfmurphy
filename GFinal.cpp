@@ -83,7 +83,7 @@ class MyFinal : public GFinal{
         if (count < 1) {
         return nullptr;
     }
-    return std::unique_ptr<GShader>(new Voronoi(points, colors, count));
+    return std::unique_ptr<GShader>(new CustomVoronoi(points, colors, count));
     }
 
      std::shared_ptr<GShader> createColorMatrixShader(const GColorMatrix& mat, GShader* realShader) {

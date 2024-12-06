@@ -1,5 +1,5 @@
 #include <memory>
-#include<algorithm>
+#include <algorithm>
 #include "include/GFinal.h"
 #include "include/GBitmap.h"
 #include "include/GMatrix.h"
@@ -9,92 +9,73 @@
 #include "shape.cpp"
 #include "ProxyShader.h"
 
-class ColorMatrixShader : public GShader {
-    public:
-        ColorMatrixShader(GShader* shader, const GColorMatrix& extraTransform)
-        : fRealShader(shader), fMat(extraTransform) {}
-        
-        bool isOpaque() override { return fRealShader->isOpaque(); }
+class MatrixColorShader : public GShader {
+public:
+    MatrixColorShader(GShader* baseShader, const GColorMatrix& colorTransform)
+        : shaderDelegate(baseShader), colorMatrix(colorTransform) {}
 
-        bool setContext(const GMatrix& ctm) override {
-            return fRealShader->setContext(ctm);
+    bool isOpaque() override {
+        return shaderDelegate->isOpaque();
+    }
+
+    bool setContext(const GMatrix& contextMatrix) override {
+        return shaderDelegate->setContext(contextMatrix);
+    }
+
+    void shadeRow(int x, int y, int count, GPixel pixels[]) override {
+        shaderDelegate->shadeRow(x, y, count, pixels);
+        for (int idx = 0; idx < count; ++idx) {
+            float alphaScale = GPixel_GetA(pixels[idx]) / 255.0f;
+            float alpha = GPixel_GetA(pixels[idx]) / 255.0f;
+            float red = GPixel_GetR(pixels[idx]) / (255.0f * alphaScale);
+            float green = GPixel_GetG(pixels[idx]) / (255.0f * alphaScale);
+            float blue = GPixel_GetB(pixels[idx]) / (255.0f * alphaScale);
+
+            float newRed = (colorMatrix[0] * red + colorMatrix[4] * green + colorMatrix[8] * blue +
+                            colorMatrix[12] * alpha + colorMatrix[16]);
+            float newGreen = (colorMatrix[1] * red + colorMatrix[5] * green + colorMatrix[9] * blue +
+                              colorMatrix[13] * alpha + colorMatrix[17]);
+            float newBlue = (colorMatrix[2] * red + colorMatrix[6] * green + colorMatrix[10] * blue +
+                             colorMatrix[14] * alpha + colorMatrix[18]);
+            float newAlpha = (colorMatrix[3] * red + colorMatrix[7] * green + colorMatrix[11] * blue +
+                              colorMatrix[15] * alpha + colorMatrix[19]);
+
+            // Clamping to [0, 1]
+            newAlpha = std::clamp(newAlpha, 0.0f, 1.0f);
+            newRed = std::clamp(newRed, 0.0f, 1.0f);
+            newGreen = std::clamp(newGreen, 0.0f, 1.0f);
+            newBlue = std::clamp(newBlue, 0.0f, 1.0f);
+
+            int pixelAlpha = GRoundToInt(newAlpha * 255.0f);
+            int pixelRed = GRoundToInt(newRed * newAlpha * 255.0f);
+            int pixelGreen = GRoundToInt(newGreen * newAlpha * 255.0f);
+            int pixelBlue = GRoundToInt(newBlue * newAlpha * 255.0f);
+
+            pixels[idx] = GPixel_PackARGB(pixelAlpha, pixelRed, pixelGreen, pixelBlue);
         }
+    }
 
-        void shadeRow(int x, int y, int count, GPixel row[]) override {
-            fRealShader->shadeRow(x, y, count, row);
-            for(int i = 0; i<count; i++){
-                GPixel p;
-                float sa = GPixel_GetA(row[i]);
-                float a =  GPixel_GetA(row[i]) / 255.0f;
-                float r = GPixel_GetR(row[i])/(255.0*sa); 
-                float g = GPixel_GetG(row[i])/(255.0*sa);
-                float b = GPixel_GetB(row[i])/(255.0*sa);
-                
-                
-                float r_new = (fMat[0] * r + fMat[4] * g + fMat[8] * b + fMat[12] * a + fMat[16]);
-                float g_new = (fMat[1] * r + fMat[5] * g + fMat[9] * b + fMat[13] * a + fMat[17]);
-                float b_new = (fMat[2] * r + fMat[6] * g + fMat[10] * b + fMat[14] * a + fMat[18]);
-                float a_new = (fMat[3] * r + fMat[7] * g + fMat[11] * b + fMat[15] * a + fMat[19]);
-
-                if(a_new < 0.0){
-                    a_new = 0.0;
-                }
-                if(a_new > 1.0){
-                    a_new = 1.0;
-                }
-                if(r_new < 0.0){
-                    r_new = 0.0;
-                }
-                if(r_new > 1.0){
-                    a_new = 1.0;
-                }
-                if(g_new < 0.0){
-                    g_new = 0.0;
-                }
-                if(g_new > 1.0){
-                    g_new = 1.0;
-                }
-                if(b_new < 0.0){
-                    b_new = 0.0;
-                }
-                if(b_new > 1.0){
-                    b_new = 1.0;
-                }
-                
-                int newA = GRoundToInt(a_new * 255.0);
-                int newR = GRoundToInt(r_new * a_new * 255.0);
-                int newG = GRoundToInt(g_new * a_new * 255.0);
-                int newB = GRoundToInt(b_new * a_new * 255.0);
-
-                row[i] = GPixel_PackARGB(newA, newR, newG, newB);
-            }
-            fRealShader->shadeRow(x, y, count, row);
-        }
-
-    private:
-        GShader* fRealShader;
-        GColorMatrix  fMat;
+private:
+    GShader* shaderDelegate;
+    GColorMatrix colorMatrix;
 };
 
-class MyFinal : public GFinal{
-    public:
-    MyFinal(){};
-    std::shared_ptr<GShader> createVoronoiShader(const GPoint points[], const GColor colors[], int count) {
+class CustomFinal : public GFinal {
+public:
+    CustomFinal() {}
+
+    std::shared_ptr<GShader> createVoronoiShader(const GPoint points[], const GColor colors[], int count) override {
         if (count < 1) {
-        return nullptr;
-    }
-    return std::unique_ptr<GShader>(new CustomVoronoi(points, colors, count));
+            return nullptr;
+        }
+        return std::unique_ptr<GShader>(new CustomVoronoi(points, colors, count));
     }
 
-     std::shared_ptr<GShader> createColorMatrixShader(const GColorMatrix& mat, GShader* realShader) {
-        return std::unique_ptr<GShader>(new ColorMatrixShader(realShader, mat));
+    std::shared_ptr<GShader> createColorMatrixShader(const GColorMatrix& matrix, GShader* shader) override {
+        return std::unique_ptr<GShader>(new MatrixColorShader(shader, matrix));
     }
 };
 
-
-
-
-
-std::unique_ptr<GFinal> GCreateFinal(){
-    return std::unique_ptr<GFinal>(new MyFinal());
-};
+std::unique_ptr<GFinal> GCreateFinal() {
+    return std::unique_ptr<GFinal>(new CustomFinal());
+}
